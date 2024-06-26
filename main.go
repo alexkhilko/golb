@@ -5,22 +5,26 @@ import (
 	"time"
 	"io"
 	"fmt"
+	"flag"
 )
 
-var counter int
-var servers []string
+var (
+	counter int
+	servers []string
+	client *http.Client
+)
 
 
 func getNextServerAddr() string {
+	if len(servers) == 0 {
+		return ""
+	}
 	counter++
 	return servers[counter % len(servers)]
 }
 
 
 func redirectToServer(w http.ResponseWriter, r *http.Request) {
-	client := &http.Client{
-        Timeout: 5 * time.Second, 
-    }
 	addr := getNextServerAddr()
 	if addr == "" {
 		http.Error(w, "No servers available", http.StatusInternalServerError)
@@ -49,7 +53,15 @@ func redirectToServer(w http.ResponseWriter, r *http.Request) {
 
 
 func main() {
-	servers = []string{"http://localhost:8091", "http://localhost:8092"}
+	flag.Parse()
+	servers = flag.Args()
+	if servers == nil {
+		servers = []string{}
+	}
+	client = &http.Client{
+        Timeout: 5 * time.Second, 
+    }
+
 	http.HandleFunc("/", redirectToServer)
 	http.ListenAndServe(":8089", nil)
 }
