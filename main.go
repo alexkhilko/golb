@@ -7,9 +7,13 @@ import (
 	"fmt"
 )
 
+var counter int
+var servers []string
+
 
 func getNextServerAddr() string {
-	return "http://localhost:8091"
+	counter++
+	return servers[counter % len(servers)]
 }
 
 
@@ -18,6 +22,10 @@ func redirectToServer(w http.ResponseWriter, r *http.Request) {
         Timeout: 5 * time.Second, 
     }
 	addr := getNextServerAddr()
+	if addr == "" {
+		http.Error(w, "No servers available", http.StatusInternalServerError)
+		return
+	}
 	proxyReq, err := http.NewRequest(r.Method, addr, r.Body)
 	if err != nil {
 		http.Error(w, "Failed to create request", http.StatusInternalServerError)
@@ -30,22 +38,18 @@ func redirectToServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-
-
-	// Copy headers and status code from the downstream response to the client response
 	for key, value := range resp.Header {
 		for _, v := range value {
 			w.Header().Add(key, v)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-
-	// Copy the response body from the downstream server to the client
 	io.Copy(w, resp.Body)
 }
 
 
 func main() {
+	servers = []string{"http://localhost:8091", "http://localhost:8092"}
 	http.HandleFunc("/", redirectToServer)
 	http.ListenAndServe(":8089", nil)
 }
