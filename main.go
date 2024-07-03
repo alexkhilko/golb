@@ -1,33 +1,24 @@
 package main
 
 import (
-	"net/http"
-	"time"
-	"io"
-	"fmt"
 	"flag"
+	"fmt"
+	"io"
+	"net/http"
 	"net/url"
+	"time"
+
+	"github.com/alexkhilko/golb/servers"
 )
 
 var (
-	counter int
-	servers []string
-	client *http.Client
+	pool               *servers.Pool
+	client             *http.Client
 	heathCheckInterval int
 )
 
-
-func getNextServerAddr() string {
-	if len(servers) == 0 {
-		return ""
-	}
-	counter++
-	return servers[counter % len(servers)]
-}
-
-
 func redirectToServer(w http.ResponseWriter, r *http.Request) {
-	addr := getNextServerAddr()
+	addr := pool.GetNextServerAddr()
 	if addr == "" {
 		http.Error(w, "No servers available", http.StatusInternalServerError)
 		return
@@ -53,25 +44,28 @@ func redirectToServer(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-func healthCheckServers(initialServers []string) {
+func healthCheckServers() {
 	client = &http.Client{
-        Timeout: 1 * time.Second, 
-    }
+		Timeout: 1 * time.Second,
+	}
+	healthy, unhealthy := pool.GetHealthyServerURLs(), pool.GetUnhealthyServerURLs()
 	for {
-		healthyServers := []string{}
-		for _, server := range initialServers {
+		for _, server := range healthy {
 			resp, err := client.Get(server)
-			if err != nil {
-				fmt.Printf("failed to check health of %s with %s\n", server, err)
-				continue
-			} 
-			if resp.StatusCode != http.StatusOK {
-				fmt.Printf("healthcheck failed for %s with %d\n", server, resp.StatusCode)
+			if err != nil || resp.StatusCode != http.StatusOK {
+				fmt.Printf("healthcheck failed for %s with %s\n", server, err)
+				pool.Suspend(server)
 				continue
 			}
-			healthyServers = append(healthyServers, server)
 		}
-		servers = healthyServers
+		for _, server := range unhealthy {
+			resp, err := client.Get(server)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				fmt.Printf("server %s recovered\n", server)
+				pool.Activate(server)
+				continue
+			}
+		}
 		time.Sleep(time.Duration(heathCheckInterval) * time.Second)
 	}
 }
@@ -84,25 +78,24 @@ func validateServerURLs(urls []string) []string {
 	for _, server := range urls {
 		_, err := url.ParseRequestURI(server)
 		if err != nil {
-		   fmt.Println("Incorrect url", server)
-		   continue
+			fmt.Println("Incorrect url", server)
+			continue
 		}
 		validUrls = append(validUrls, server)
 	}
 	return validUrls
 }
 
-
 func main() {
 	flag.IntVar(&heathCheckInterval, "h", 5, "Interval between health checks in seconds")
 	flag.Parse()
-	servers = validateServerURLs(flag.Args())
-	go healthCheckServers(servers)
+	serverURLs := validateServerURLs(flag.Args())
+	pool = servers.NewPool(serverURLs)
+	go healthCheckServers()
 
 	client = &http.Client{
-        Timeout: 5 * time.Second, 
-    }
-
+		Timeout: 5 * time.Second,
+	}
 	http.HandleFunc("/", redirectToServer)
 	http.ListenAndServe(":8089", nil)
 }
