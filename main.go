@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"time"
-
 	"github.com/alexkhilko/golb/servers"
 )
 
@@ -48,23 +47,24 @@ func healthCheckServers() {
 	client = &http.Client{
 		Timeout: 1 * time.Second,
 	}
-	healthy, unhealthy := pool.GetHealthyServerURLs(), pool.GetUnhealthyServerURLs()
 	for {
-		for _, server := range healthy {
-			resp, err := client.Get(server)
+		healthyHead := pool.Healthy.Top()
+		for healthyHead != nil {
+			resp, err := client.Get(healthyHead.Val)
 			if err != nil || resp.StatusCode != http.StatusOK {
-				fmt.Printf("healthcheck failed for %s with %s\n", server, err)
-				pool.Suspend(server)
-				continue
+				fmt.Printf("healthcheck failed for %s with %s\n", healthyHead.Val, err)
+				pool.Suspend(healthyHead)
 			}
+			healthyHead = healthyHead.Next
 		}
-		for _, server := range unhealthy {
-			resp, err := client.Get(server)
+		unhealthyHead := pool.Unhealthy.Top()
+		for unhealthyHead != nil {
+			resp, err := client.Get(unhealthyHead.Val)
 			if err == nil && resp.StatusCode == http.StatusOK {
-				fmt.Printf("server %s recovered\n", server)
-				pool.Activate(server)
-				continue
+				fmt.Printf("server %s recovered\n", unhealthyHead.Val)
+				pool.Activate(unhealthyHead)
 			}
+			unhealthyHead = unhealthyHead.Next
 		}
 		time.Sleep(time.Duration(heathCheckInterval) * time.Second)
 	}
